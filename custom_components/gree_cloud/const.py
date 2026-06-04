@@ -63,7 +63,7 @@ GREE_MQTT_SERVERS = {
     "India": "mqtt-in.gree.com",
     "Latin American": "mqtt-la.gree.com",
     "Middle East": "mqtt-me.gree.com",
-    "North American": "mqtt-us.gree.com",
+    "North American": "mqtt-na.gree.com",
     "Russia": "mqtt-ru.gree.com",
     "South American": "mqtt-sa.gree.com",
 }

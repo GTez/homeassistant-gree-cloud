@@ -91,8 +91,11 @@ class HWHPAwareCloudDevice(CloudDevice):
             if self._response_data:
                 self.handle_state_update(**self._response_data)
         except asyncio.TimeoutError:
-            _LOGGER.warning(
-                "Timeout waiting for state update from %s", self.device_info.name
+            # Cascade gateways push state on status/ rather than acking the
+            # request; state is applied via the unsolicited path, so this is
+            # expected and not an error.
+            _LOGGER.debug(
+                "No state-request ack from %s (state arrives via status push)", self.device_info.name
             )
         finally:
             self._response_event = None
@@ -292,6 +295,11 @@ class CloudDiscoveryService:
                     )
 
                     # Bind to cloud device (subscribe to MQTT topics)
+                    _pm = getattr(cloud_dev_info, "parent_mac", None)
+                    if _pm:
+                        device._parent_mac = _pm
+                        device._is_cascade = True
+                        _LOGGER.info("Cascade bind: %s parent=%s child=%s", cloud_dev_info.name, _pm, device._child_mac)
                     await device.bind()
 
                     _LOGGER.debug(

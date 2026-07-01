@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from greeclimate.cloud_api import GreeCloudApi
@@ -23,6 +24,36 @@ PLATFORMS = [Platform.CLIMATE, Platform.SWITCH, Platform.WATER_HEATER]
 
 # Substrings that identify an MQTT "not connected" error from paho / aiomqtt.
 _MQTT_DISCONNECTED_MARKERS = ("code:4", "not currently connected", "not connected")
+
+# MQTT connection watchdog: how often to poll connection health, and the max
+# exponential backoff after repeated failed reconnects.
+WATCHDOG_INTERVAL = 20
+WATCHDOG_MAX_BACKOFF = 300
+
+
+async def _mqtt_watchdog(hass: HomeAssistant, entry: GreeCloudConfigEntry) -> None:
+    """Periodically ensure the MQTT session is alive; reclaim it if not.
+
+    Gree Cloud allows only ONE MQTT session per account, so opening the Gree+
+    app kicks Home Assistant off the broker. Combined with the immediate
+    on_connection_lost callback, this watchdog reconnects (and re-binds every
+    device) so HA reclaims the session instead of going dark until a restart.
+    """
+    fails = 0
+    while True:
+        await asyncio.sleep(
+            min(WATCHDOG_INTERVAL * (2 ** fails), WATCHDOG_MAX_BACKOFF)
+            if fails else WATCHDOG_INTERVAL
+        )
+        runtime = getattr(entry, "runtime_data", None)
+        if runtime is None or runtime.mqtt_client is None:
+            continue
+        if runtime.mqtt_client.is_connected:
+            fails = 0
+            continue
+        _LOGGER.warning("MQTT watchdog: session down — attempting to reclaim")
+        ok = await async_reconnect_mqtt(hass, entry)
+        fails = 0 if ok else fails + 1
 
 
 async def async_reconnect_mqtt(hass: HomeAssistant, entry: GreeCloudConfigEntry) -> bool:
@@ -57,6 +88,9 @@ async def async_reconnect_mqtt(hass: HomeAssistant, entry: GreeCloudConfigEntry)
                 credentials.token,
                 server=mqtt_server,
             )
+            # Carry the connection-lost callback over so the fresh client can
+            # also trigger a reclaim if it gets dropped again.
+            new_client.on_connection_lost = old_client.on_connection_lost
             await new_client.connect()
         except Exception as err:
             _LOGGER.error("MQTT reconnect failed during connect: %s", err)
@@ -134,6 +168,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: GreeCloudConfigEntry) ->
         entry.runtime_data.coordinators = coordinators
 
         _LOGGER.info("Successfully discovered %d cloud devices", len(coordinators))
+
+        # Reclaim the single-per-account MQTT session if the broker drops us
+        # (e.g. the Gree+ app steals it): immediate callback + periodic watchdog.
+        def _schedule_reclaim() -> None:
+            entry.async_create_background_task(
+                hass, async_reconnect_mqtt(hass, entry), "gree_cloud_mqtt_reclaim"
+            )
+
+        mqtt_client.on_connection_lost = _schedule_reclaim
+        entry.async_create_background_task(
+            hass, _mqtt_watchdog(hass, entry), "gree_cloud_mqtt_watchdog"
+        )
 
         # Setup platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

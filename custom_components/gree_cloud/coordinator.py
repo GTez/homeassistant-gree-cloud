@@ -77,6 +77,11 @@ class HWHPAwareCloudDevice(CloudDevice):
 
         command = {"t": "status", "cols": props}
 
+        is_cascade = getattr(self, "_is_cascade", False)
+        if is_cascade:
+            # Match the Gree+ app: address the head via `sub` inside the pack.
+            command["sub"] = self._child_mac
+
         await self._mqtt_client.publish_command(
             self._parent_mac,
             command,
@@ -84,16 +89,21 @@ class HWHPAwareCloudDevice(CloudDevice):
             self._child_mac,
         )
 
+        # Cascade heads never ACK a status *request* — their state is delivered
+        # only via retained/unsolicited `status/` pushes (verified on a live
+        # system). Blocking the full command_timeout (~10s) here, once per head
+        # per 60s cycle, is what starves the single shared MQTT connection's
+        # keepalive and eventually kills it. So for cascade we wait only briefly
+        # for any in-flight push and then return; steady-state reads come
+        # through the unsolicited-push path in handle_state_update().
+        wait_timeout = 1.5 if is_cascade else self._command_timeout
         try:
             await asyncio.wait_for(
-                self._response_event.wait(), timeout=self._command_timeout
+                self._response_event.wait(), timeout=wait_timeout
             )
             if self._response_data:
                 self.handle_state_update(**self._response_data)
         except asyncio.TimeoutError:
-            # Cascade gateways push state on status/ rather than acking the
-            # request; state is applied via the unsolicited path, so this is
-            # expected and not an error.
             _LOGGER.debug(
                 "No state-request ack from %s (state arrives via status push)", self.device_info.name
             )

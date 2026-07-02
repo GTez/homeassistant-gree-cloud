@@ -17,7 +17,7 @@ from greeclimate.mqtt_client import GreeMqttClient
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -156,7 +156,14 @@ class GreeCloudRuntimeData:
 
 
 class CloudDeviceDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Manages polling for state changes from cloud devices."""
+    """Coordinates cloud-device state, push-driven with a polled reconcile.
+
+    Steady-state reads are event-driven: the device invokes
+    ``_handle_push_update`` on each unsolicited MQTT status push, which publishes
+    the new state to entities immediately. The periodic ``_async_update_data``
+    poll is a slow reconcile/nudge and the MQTT-reconnect guard — it no longer
+    blocks on a status ACK that cascade heads never send.
+    """
 
     config_entry: GreeCloudConfigEntry
 
@@ -177,6 +184,15 @@ class CloudDeviceDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.device = device
         self._error_count: int = 0
+        # Push-driven reads: refresh entities immediately when the device sends
+        # an unsolicited status push, instead of waiting for the next poll. The
+        # periodic poll below remains a slow reconcile/nudge + reconnect guard.
+        device.set_state_update_callback(self._handle_push_update)
+
+    @callback
+    def _handle_push_update(self) -> None:
+        """An unsolicited device push updated state — publish it to entities now."""
+        self.async_set_updated_data(copy.deepcopy(self.device.raw_properties))
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Update the state of the device from cloud."""

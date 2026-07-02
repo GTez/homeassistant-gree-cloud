@@ -5,10 +5,10 @@
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/davo22/homeassistant-gree-cloud",
-  "iot_class": "cloud_polling",
+  "iot_class": "cloud_push",
   "integration_type": "hub",
   "loggers": ["greeclimate"],
-  "requirements": ["greeclimate @ git+https://github.com/GTez/greeclimate.git@c79a4e8d52c8fcaee845f1a5e6cd1bda181b42f3"],
+  "requirements": ["greeclimate @ git+https://github.com/GTez/greeclimate.git@c33d7926aaaaacd0e5f830c8f813cf0e7d233f3e"],
   "version": "1.1.4",
   "brand": "gree"
 }
